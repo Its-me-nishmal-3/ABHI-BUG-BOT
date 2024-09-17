@@ -187,8 +187,6 @@ async function startXeonBotInc() {
         let
 mime = await FileType.fromBuffer(buff); let video = mime?.ext === 'mp4' ? buff : await videoToWebp(buff); return XeonBotInc.sendMessage(jid, { sticker: { url: video, }, ...options }, { quoted }); }
 
-typescript
-Copy code
 XeonBotInc.sendMedia = async (jid, path, type, caption, quoted, options = {}) => {
     let buffer = await getBuffer(path);
     let mime = await FileType.fromBuffer(buffer);
