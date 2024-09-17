@@ -1,42 +1,41 @@
-require('./settings')
-const pino = require('pino')
-const { Boom } = require('@hapi/boom')
-const fs = require('fs')
-const chalk = require('chalk')
-const FileType = require('file-type')
-const path = require('path')
-const axios = require('axios')
-const PhoneNumber = require('awesome-phonenumber')
-const { imageToWebp, videoToWebp, writeExifImg, writeExifVid } = require('./lib/exif')
-const { smsg, isUrl, generateMessageTag, getBuffer, getSizeMedia, fetch, await, sleep, reSize } = require('./lib/myfunc')
-const { default: XeonBotIncConnect, delay, PHONENUMBER_MCC, makeCacheableSignalKeyStore, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, generateForwardMessageContent, prepareWAMessageMedia, generateWAMessageFromContent, generateMessageID, downloadContentFromMessage, makeInMemoryStore, jidDecode, proto } = require("@whiskeysockets/baileys")
-const NodeCache = require("node-cache")
-const Pino = require("pino")
-// Removed readline import
-// const readline = require("readline")
-const { parsePhoneNumber } = require("libphonenumber-js")
-const makeWASocket = require("@whiskeysockets/baileys").default
+require('./settings');
+const pino = require('pino');
+const { Boom } = require('@hapi/boom');
+const fs = require('fs');
+const chalk = require('chalk');
+const FileType = require('file-type');
+const path = require('path');
+const axios = require('axios');
+const PhoneNumber = require('awesome-phonenumber');
+const { imageToWebp, videoToWebp, writeExifImg, writeExifVid } = require('./lib/exif');
+const { smsg, isUrl, generateMessageTag, getBuffer, getSizeMedia, fetch, await, sleep, reSize } = require('./lib/myfunc');
+const { default: XeonBotIncConnect, delay, PHONENUMBER_MCC, makeCacheableSignalKeyStore, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, generateForwardMessageContent, prepareWAMessageMedia, generateWAMessageFromContent, generateMessageID, downloadContentFromMessage, makeInMemoryStore, jidDecode, proto } = require("@whiskeysockets/baileys");
+const NodeCache = require("node-cache");
+const Pino = require("pino");
 
 const store = makeInMemoryStore({
     logger: pino().child({
         level: 'silent',
         stream: 'store'
     })
-})
+});
 
-let phoneNumber = "917994107442"
-let owner = JSON.parse(fs.readFileSync('./database/owner.json'))
+// Fetch phone number from command-line arguments or environment variable
+const phoneNumber = process.argv[2] || process.env.PHONE_NUMBER;
 
-const pairingCode = !!phoneNumber || process.argv.includes("--pairing-code")
-const useMobile = process.argv.includes("--mobile")
+if (!phoneNumber) {
+    console.error(chalk.redBright("Phone number is required. Please provide it as a command-line argument or environment variable."));
+    process.exit(1);
+}
 
-// Removed readline interface and question function
+const pairingCode = !!phoneNumber || process.argv.includes("--pairing-code");
+const useMobile = process.argv.includes("--mobile");
 
 async function startXeonBotInc() {
     //------------------------------------------------------
-    let { version, isLatest } = await fetchLatestBaileysVersion()
-    const {  state, saveCreds } =await useMultiFileAuthState(`./session`)
-    const msgRetryCounterCache = new NodeCache() // for retry message, "waiting message"
+    let { version, isLatest } = await fetchLatestBaileysVersion();
+    const { state, saveCreds } = await useMultiFileAuthState(`./session`);
+    const msgRetryCounterCache = new NodeCache(); // for retry message, "waiting message"
     const XeonBotInc = makeWASocket({
         logger: pino({ level: 'silent' }),
         printQRInTerminal: !pairingCode, // popping up QR in terminal log
@@ -49,66 +48,180 @@ async function startXeonBotInc() {
         markOnlineOnConnect: true, // set false for offline
         generateHighQualityLinkPreview: true, // make high preview link
         getMessage: async (key) => {
-            let jid = jidNormalizedUser(key.remoteJid)
-            let msg = await store.loadMessage(jid, key.id)
-            return msg?.message || ""
+            let jid = jidNormalizedUser(key.remoteJid);
+            let msg = await store.loadMessage(jid, key.id);
+
+            return msg?.message || "";
         },
         msgRetryCounterCache, // Resolve waiting messages
         defaultQueryTimeoutMs: undefined, // for this issues https://github.com/WhiskeySockets/Baileys/issues/276
-    })
-   
-    store.bind(XeonBotInc.ev)
+    });
+
+    store.bind(XeonBotInc.ev);
 
     // login use pairing code
-    // source code https://github.com/WhiskeySockets/Baileys/blob/master/Example/example.ts#L61
     if (pairingCode && !XeonBotInc.authState.creds.registered) {
-        if (useMobile) throw new Error('Cannot use pairing code with mobile api')
+        if (useMobile) throw new Error('Cannot use pairing code with mobile api');
 
-        phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
+        let formattedPhoneNumber = phoneNumber.replace(/[^0-9]/g, '');
 
-        if (!Object.keys(PHONENUMBER_MCC).some(v => phoneNumber.startsWith(v))) {
-            console.log(chalk.bgBlack(chalk.redBright("Invalid WhatsApp Number. Make sure to include your country code. 📌Example: +919074692450")));
+        if (!Object.keys(PHONENUMBER_MCC).some(v => formattedPhoneNumber.startsWith(v))) {
+            console.error(chalk.bgBlack(chalk.redBright("Enter a valid WhatsApp number with country code, e.g., +919074692450")));
             process.exit(0);
         }
 
         setTimeout(async () => {
-            let code = await XeonBotInc.requestPairingCode(phoneNumber)
-            code = code?.match(/.{1,4}/g)?.join("-") || code
-            console.log(chalk.black(chalk.bgGreen(`Your Pairing Code Is : `)), chalk.black(chalk.white(code)))
-        }, 3000)
+            let code = await XeonBotInc.requestPairingCode(formattedPhoneNumber);
+            code = code?.match(/.{1,4}/g)?.join("-") || code;
+            console.log(chalk.black(chalk.bgGreen(`Your Pairing Code Is : `)), chalk.black(chalk.white(code)));
+        }, 3000);
     }
 
     XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
         try {
-            const mek = chatUpdate.messages[0]
-            if (!mek.message) return
-            mek.message = (Object.keys(mek.message)[0] === 'ephemeralMessage') ? mek.message.ephemeralMessage.message : mek.message
-            if (mek.key && mek.key.remoteJid === 'status@broadcast'){
+            const mek = chatUpdate.messages[0];
+            if (!mek.message) return;
+            mek.message = (Object.keys(mek.message)[0] === 'ephemeralMessage') ? mek.message.ephemeralMessage.message : mek.message;
+            if (mek.key && mek.key.remoteJid === 'status@broadcast') {
                 if (autoread_status) {
-                    await XeonBotInc.readMessages([mek.key]) 
+                    await XeonBotInc.readMessages([mek.key]);
                 }
-            } 
-            if (!XeonBotInc.public && !mek.key.fromMe && chatUpdate.type === 'notify') return
-            if (mek.key.id.startsWith('BAE5') && mek.key.id.length === 16) return
-            const m = smsg(XeonBotInc, mek, store)
-            require("./ABHI-BUG-BOT")(XeonBotInc, m, chatUpdate, store)
+            }
+            if (!XeonBotInc.public && !mek.key.fromMe && chatUpdate.type === 'notify') return;
+            if (mek.key.id.startsWith('BAE5') && mek.key.id.length === 16) return;
+            const m = smsg(XeonBotInc, mek, store);
+            require("./ABHI-BUG-BOT")(XeonBotInc, m, chatUpdate, store);
         } catch (err) {
-            console.log(err)
+            console.log(err);
         }
-    })
+    });
 
-    // Rest of the script
+    XeonBotInc.decodeJid = (jid) => {
+        if (!jid) return jid;
+        if (/:\d+@/gi.test(jid)) {
+            let decode = jidDecode(jid) || {};
+            return decode.user && decode.server && decode.user + '@' + decode.server || jid;
+        } else return jid;
+    };
+
+    XeonBotInc.ev.on('contacts.update', update => {
+        for (let contact of update) {
+            let id = XeonBotInc.decodeJid(contact.id);
+            if (store && store.contacts) store.contacts[id] = {
+                id,
+                name: contact.notify
+            };
+        }
+    });
+
+    XeonBotInc.getName = (jid, withoutContact = false) => {
+        id = XeonBotInc.decodeJid(jid);
+        withoutContact = XeonBotInc.withoutContact || withoutContact;
+        let v;
+        if (id.endsWith("@g.us")) return new Promise(async (resolve) => {
+            v = store.contacts[id] || {};
+            if (!(v.name || v.subject)) v = XeonBotInc.groupMetadata(id) || {};
+            resolve(v.name || v.subject || PhoneNumber('+' + id.replace('@s.whatsapp.net', '')).getNumber('international'));
+        });
+        else v = id === '0@s.whatsapp.net' ? {
+                id,
+                name: 'WhatsApp'
+            } : id === XeonBotInc.decodeJid(XeonBotInc.user.id) ?
+            XeonBotInc.user :
+            (store.contacts[id] || {});
+        return (withoutContact ? '' : v.name) || v.subject || v.verifiedName || PhoneNumber('+' + jid.replace('@s.whatsapp.net', '')).getNumber('international');
+    };
+
+    XeonBotInc.public = true;
+
+    XeonBotInc.serializeM = (m) => smsg(XeonBotInc, m, store);
+
+    XeonBotInc.ev.on("connection.update", async (s) => {
+        const { connection, lastDisconnect } = s;
+        if (connection === "open") {
+            console.log(chalk.magenta(` `));
+            console.log(chalk.yellow(`✅Connected to => ` + JSON.stringify(XeonBotInc.user, null, 2)));
+            await delay(1999);
+            console.log(chalk.yellow(`\n\n                  ${chalk.bold.blue(`[ ${botname} ]`)}\n\n`));
+            console.log(chalk.cyan(`< ================================================== >`));
+            console.log(chalk.magenta(`\n${themeemoji} YT CHANNEL: Comedy Melody CH`));
+            console.log(chalk.magenta(`${themeemoji} GITHUB: AbhishekSuresh2 `));
+            console.log(chalk.magenta(`${themeemoji} INSTAGRAM: @abhishek_ser `));
+            console.log(chalk.magenta(`${themeemoji} WA NUMBER: ${owner}`));
+            console.log(chalk.magenta(`${themeemoji} Thank You For Using ${botname}\n`));
+        }
+        if (
+            connection === "close" &&
+            lastDisconnect &&
+            lastDisconnect.error &&
+            lastDisconnect.error.output.statusCode != 401
+        ) {
+            startXeonBotInc();
+        }
+    });
+
+    XeonBotInc.ev.on('creds.update', saveCreds);
+    XeonBotInc.ev.on("messages.upsert", () => { });
+
+    XeonBotInc.sendText = (jid, text, quoted = '', options) => XeonBotInc.sendMessage(jid, {
+        text: text,
+        ...options
+    }, {
+        quoted,
+        ...options
+    });
+
+    XeonBotInc.sendTextWithMentions = async (jid, text, quoted, options = {}) => XeonBotInc.sendMessage(jid, {
+        text: text,
+        mentions: [...text.matchAll(/@(\d{0,16})/g)].map(v => v[1] + '@s.whatsapp.net'),
+        ...options
+    }, {
+        quoted
+    });
+
+    XeonBotInc.sendImageAsSticker = async (jid, path, quoted, options = {}) => {
+        let buff = await getBuffer(path);
+        let mime = await FileType.fromBuffer(buff);
+        let image = mime?.ext === 'jpg' || mime?.ext === 'jpeg' ? buff : await imageToWebp(buff);
+        return XeonBotInc.sendMessage(jid, {
+            sticker: {
+                url: image,
+            },
+            ...options
+        }, {
+            quoted
+        });
+    };
+
+    XeonBotInc.sendVideoAsSticker = async (jid, path, quoted, options = {}) => {
+        let buff = await getBuffer(path);
+        let mime = await FileType.fromBuffer(buff);
+        let video = mime?.ext === 'mp4' ? buff : await videoToWebp(buff);
+        return XeonBotInc.sendMessage(jid, {
+            sticker: {
+                url: video,
+            },
+            ...options
+        }, {
+            quoted
+        });
+    };
+
+    XeonBotInc.sendMedia = async (jid, path, type, options) => {
+        let buffer = await getBuffer(path);
+        let mime = await FileType.fromBuffer(buffer);
+        return XeonBotInc.sendMessage(jid, {
+            [type]: {
+                url: path,
+                mimetype: mime.mime,
+                ...options
+            }
+        }, {
+            quoted: options?.quoted
+        });
+    };
+
+    return XeonBotInc;
 }
 
-// Removed readline closing
-
-process.on('uncaughtException', function (err) {
-    let e = String(err)
-    if (e.includes("Socket connection timeout")) return
-    if (e.includes("item-not-found")) return
-    if (e.includes("rate-overlimit")) return
-    if (e.includes("Connection Closed")) return
-    if (e.includes("Timed Out")) return
-    if (e.includes("Value not found")) return
-    console.log('Caught exception: ', err)
-})  
+startXeonBotInc();
